@@ -29,7 +29,7 @@ const REALITY_PORT = process.env.REALITY_PORT || '';        // reality端口，�
 const CFIP = process.env.CFIP || 'saas.sin.fan';            // 节点优选域名或优选ip
 const CFPORT = process.env.CFPORT || 443;                   // 节点优选域名或优选ip对应的端口
 const NAME = process.env.NAME || '';                        // 节点名称
-const CHAT_ID = process.env.CHAT_ID || '6408048903';                  // Telegram chat_id  两个变量不全不推送节点到TG 
+const CHAT_ID = process.env.CHAT_ID || '';                        // Telegram chat_id  两个变量不全不推送节点到TG 
 const BOT_TOKEN = process.env.BOT_TOKEN || '';              // Telegram bot_token 两个变量不全不推送节点到TG 
 const SHOW_LOG = !['false', 'disable', 'no'].includes((process.env.SHOW_LOG || 'true').toLowerCase()); // 是否显示日志输出，true/yes显示，false/disable/no屏蔽，默认显示
 
@@ -540,6 +540,14 @@ function downloadFile(fileName, fileUrl, callback) {
 }
 
 // 下载并运行依赖文件
+// 若镜像在构建时已内置官方二进制（BAKED_BIN_DIR），则直接拷贝使用，跳过运行时下载
+const BAKED_BIN_DIR = process.env.BAKED_BIN_DIR || '/app/bin';
+function bakedBinaryPath(kind) {
+  if (kind === 'xray') return path.join(BAKED_BIN_DIR, 'web');
+  if (kind === 'cloudflared') return path.join(BAKED_BIN_DIR, 'bot');
+  return null;
+}
+
 async function downloadFilesAndRun() {
   const architecture = getSystemArchitecture();
   const filesToDownload = getFilesForArchitecture(architecture);
@@ -567,6 +575,19 @@ async function downloadFilesAndRun() {
           reject(err);
         });
       };
+
+      // 优先使用镜像内置二进制；不存在或拷贝失败时回退到原下载逻辑
+      const baked = bakedBinaryPath(fileInfo.kind);
+      if (baked && fs.existsSync(baked)) {
+        try {
+          fs.copyFileSync(baked, fileInfo.fileName);
+          console.log(`Using baked binary for ${path.basename(fileInfo.fileName)} (${baked})`);
+          resolve(fileInfo.fileName);
+          return;
+        } catch (copyErr) {
+          console.log(`Baked binary copy failed, falling back to download: ${copyErr.message}`);
+        }
+      }
 
       tryDownload(0);
     });
@@ -696,18 +717,20 @@ function getFilesForArchitecture(architecture) {
   const baseUrl = architecture === 'arm' ? 'https://arm64.oooen.com' : 'https://amd64.oooen.com';
   const backupUrl = architecture === 'arm' ? 'https://arm64.ssss.nyc.mn' : 'https://amd64.ssss.nyc.mn';
   const baseFiles = [
-    { fileName: webPath, fileUrls: [`${baseUrl}/web`, `${backupUrl}/web`] },
-    { fileName: botPath, fileUrls: [`${baseUrl}/bot`, `${backupUrl}/bot`] }
+    { kind: 'xray', fileName: webPath, fileUrls: [`${baseUrl}/web`, `${backupUrl}/web`] },
+    { kind: 'cloudflared', fileName: botPath, fileUrls: [`${baseUrl}/bot`, `${backupUrl}/bot`] }
   ];
 
   if (NEZHA_SERVER && NEZHA_KEY) {
     if (NEZHA_PORT) {
       baseFiles.unshift({
+        kind: 'nezha',
         fileName: npmPath,
         fileUrls: [`${baseUrl}/agent`, `${backupUrl}/agent`]
       });
     } else {
       baseFiles.unshift({
+        kind: 'nezha',
         fileName: phpPath,
         fileUrls: [`${baseUrl}/v1`, `${backupUrl}/v1`]
       });
